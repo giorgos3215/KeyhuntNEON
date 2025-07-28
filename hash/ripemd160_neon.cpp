@@ -44,12 +44,11 @@ namespace ripemd160neon {
 
 #define ROL(x,n) vorrq_u32(vshlq_n_u32(x, n), vshrq_n_u32(x, 32 - n))
 
-#define not(x) vmvnq_u32(x)
 #define f1(x,y,z) veorq_u32(x, veorq_u32(y, z))
 #define f2(x,y,z) vorrq_u32(vandq_u32(x,y),vandq_u32(vmvnq_u32(x),z))
-#define f3(x,y,z) veorq_u32(vorrq_u32(x,not(y)),z)
+#define f3(x,y,z) veorq_u32(vorrq_u32(x,vmvnq_u32(y)),z)
 #define f4(x,y,z) vorrq_u32(vandq_u32(x,z),vandq_u32(vmvnq_u32(z),y))
-#define f5(x,y,z) veorq_u32(x,vorrq_u32(y,not(z)))
+#define f5(x,y,z) veorq_u32(x,vorrq_u32(y,vmvnq_u32(z)))
 
 
 #define add3(x0, x1, x2) vaddq_u32(vaddq_u32(x0, x1), x2)
