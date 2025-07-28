@@ -16,6 +16,7 @@ email: albertobsd@gmail.com
 #include "bloom/bloom.h"
 #include "util.h"
 #include "hashing.h"
+#include "hash/ripemd160_neon.h"
 
 #include "gmp256k1/GMP256K1.h"
 #include "gmp256k1/Point.h"
@@ -4531,127 +4532,219 @@ DWORD WINAPI thread_pub2rmd(LPVOID vargp) {
 void *thread_pub2rmd(void *vargp)	{
 #endif
 	FILE *fd;
-	Int key_mpz;
+	Int key_mpz[4];
 	struct tothread *tt;
 	uint64_t i,limit;
-	char digest160[20];
-	char digest256[32];
+	char digest160[4][20];
+	char digest256[4][32];
 	char *temphex;
-	int thread_number,r;
+	int thread_number,r[4];
 	int pub2rmd_continue = 1;
-	struct publickey pub;
+	struct publickey pub[4];
 	limit = 0xFFFFFFFF;
 	tt = (struct tothread *)vargp;
 	thread_number = tt->nt;
 	do {
 		if(FLAGRANDOM){
-			key_mpz.Rand(&n_range_start,&n_range_diff);
+			key_mpz[0].Rand(&n_range_start,&n_range_diff);
+			// Generate 4 consecutive keys for parallel processing
+			key_mpz[1].Set(&key_mpz[0]);
+			key_mpz[1].AddOne();
+			key_mpz[2].Set(&key_mpz[1]);
+			key_mpz[2].AddOne();
+			key_mpz[3].Set(&key_mpz[2]);
+			key_mpz[3].AddOne();
 		}
 		else	{
 			if(n_range_start.IsLower(&n_range_end))	{
 #if defined(_WIN64) && !defined(__CYGWIN__)
 				WaitForSingleObject(write_random, INFINITE);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
+				key_mpz[0].Set(&n_range_start);
+				n_range_start.Add((uint64_t)4); // Increment by 4 for parallel processing
 				ReleaseMutex(write_random);
 #else
 				pthread_mutex_lock(&write_random);
-				key_mpz.Set(&n_range_start);
-				n_range_start.Add(N_SEQUENTIAL_MAX);
-				pthread_mutex_lock(&write_random);
+				key_mpz[0].Set(&n_range_start);
+				n_range_start.Add((uint64_t)4); // Increment by 4 for parallel processing
+				pthread_mutex_unlock(&write_random);
 #endif
+				// Generate 4 consecutive keys for parallel processing
+				key_mpz[1].Set(&key_mpz[0]);
+				key_mpz[1].AddOne();
+				key_mpz[2].Set(&key_mpz[1]);
+				key_mpz[2].AddOne();
+				key_mpz[3].Set(&key_mpz[2]);
+				key_mpz[3].AddOne();
 			}
 			else	{
 				pub2rmd_continue = 0;
 			}
 		}
 		if(pub2rmd_continue)	{
-			key_mpz.Get32Bytes(pub.X.data8);
-			pub.parity = 0x02;
-			pub.X.data32[7] = 0;
+			// Get 32-byte representations of the keys
+			key_mpz[0].Get32Bytes(pub[0].X.data8);
+			key_mpz[1].Get32Bytes(pub[1].X.data8);
+			key_mpz[2].Get32Bytes(pub[2].X.data8);
+			key_mpz[3].Get32Bytes(pub[3].X.data8);
+			
+			// Set parity for uncompressed keys
+			pub[0].parity = 0x02;
+			pub[1].parity = 0x02;
+			pub[2].parity = 0x02;
+			pub[3].parity = 0x02;
+			
+			// Clear the high bits
+			pub[0].X.data32[7] = 0;
+			pub[1].X.data32[7] = 0;
+			pub[2].X.data32[7] = 0;
+			pub[3].X.data32[7] = 0;
+			
 			if(FLAGMATRIX)	{
-				temphex = tohex((char*)&pub,33);
+				temphex = tohex((char*)&pub[0],33);
 				printf("[+] Thread 0x%s  \n",temphex);
 				free(temphex);
 				fflush(stdout);
 			}
 			else	{
 				if(FLAGQUIET == 0)	{
-					temphex = tohex((char*)&pub,33);
+					temphex = tohex((char*)&pub[0],33);
 					printf("\r[+] Thread %s  \r",temphex);
 					free(temphex);
 					fflush(stdout);
 					THREADOUTPUT = 1;
 				}
 			}
+			
+			// Process 4 keys in parallel
 			for(i = 0 ; i < limit ; i++) {
-				pub.parity = 0x02;
-				sha256((uint8_t*)&pub, 33, (uint8_t*)digest256);
-				rmd160((const unsigned char*)digest256,32,(unsigned char*) digest160);
-				r = bloom_check(&bloom,digest160,MAXLENGTHADDRESS);
-				if(r)  {
-					r = searchbinary(addressTable,digest160,N);
-					if(r)	{
-						temphex = tohex((char*)&pub,33);
-						printf("\nHit: Publickey found %s\n",temphex);
-						fd = fopen("KEYFOUNDKEYFOUND.txt","a+");
-						if(fd != NULL)	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-							WaitForSingleObject(write_keys, INFINITE);
-							fprintf(fd,"Publickey found %s\n",temphex);
-							fclose(fd);
-							ReleaseMutex(write_keys);
+#ifdef __ARM_NEON__
+				// Use NEON-optimized functions for parallel processing
+				// First process uncompressed keys (parity = 0x02)
+				sha256_4(33, (uint8_t*)&pub[0], (uint8_t*)&pub[1], (uint8_t*)&pub[2], (uint8_t*)&pub[3],
+				         (uint8_t*)digest256[0], (uint8_t*)digest256[1], (uint8_t*)digest256[2], (uint8_t*)digest256[3]);
+				ripemd160neon_32((uint8_t*)digest256[0], (uint8_t*)digest256[1], (uint8_t*)digest256[2], (uint8_t*)digest256[3],
+				                 (uint8_t*)digest160[0], (uint8_t*)digest160[1], (uint8_t*)digest160[2], (uint8_t*)digest160[3]);
 #else
-							pthread_mutex_lock(&write_keys);
-							fprintf(fd,"Publickey found %s\n",temphex);
-							fclose(fd);
-							pthread_mutex_unlock(&write_keys);
+				// Fallback to standard functions if NEON is not available
+				sha256((uint8_t*)&pub[0], 33, (uint8_t*)digest256[0]);
+				sha256((uint8_t*)&pub[1], 33, (uint8_t*)digest256[1]);
+				sha256((uint8_t*)&pub[2], 33, (uint8_t*)digest256[2]);
+				sha256((uint8_t*)&pub[3], 33, (uint8_t*)digest256[3]);
+				rmd160((const unsigned char*)digest256[0],32,(unsigned char*) digest160[0]);
+				rmd160((const unsigned char*)digest256[1],32,(unsigned char*) digest160[1]);
+				rmd160((const unsigned char*)digest256[2],32,(unsigned char*) digest160[2]);
+				rmd160((const unsigned char*)digest256[3],32,(unsigned char*) digest160[3]);
 #endif
+				
+				// Check bloom filter for all 4 keys
+				r[0] = bloom_check(&bloom,digest160[0],MAXLENGTHADDRESS);
+				r[1] = bloom_check(&bloom,digest160[1],MAXLENGTHADDRESS);
+				r[2] = bloom_check(&bloom,digest160[2],MAXLENGTHADDRESS);
+				r[3] = bloom_check(&bloom,digest160[3],MAXLENGTHADDRESS);
+				
+				// Process hits for uncompressed keys
+				for(int j = 0; j < 4; j++) {
+					if(r[j])  {
+						r[j] = searchbinary(addressTable,digest160[j],N);
+						if(r[j])	{
+							temphex = tohex((char*)&pub[j],33);
+							printf("\nHit: Publickey found %s\n",temphex);
+							fd = fopen("KEYFOUNDKEYFOUND.txt","a+");
+							if(fd != NULL)	{
+#if defined(_WIN64) && !defined(__CYGWIN__)
+								WaitForSingleObject(write_keys, INFINITE);
+								fprintf(fd,"Publickey found %s\n",temphex);
+								fclose(fd);
+								ReleaseMutex(write_keys);
+#else
+								pthread_mutex_lock(&write_keys);
+								fprintf(fd,"Publickey found %s\n",temphex);
+								fclose(fd);
+								pthread_mutex_unlock(&write_keys);
+#endif
+							}
+							else	{
+								fprintf(stderr,"\nPublickey found %s\nbut the file can't be open\n",temphex);
+								exit(EXIT_FAILURE);
+							}
+							free(temphex);
 						}
-						else	{
-							fprintf(stderr,"\nPublickey found %s\nbut the file can't be open\n",temphex);
-							exit(EXIT_FAILURE);
-						}
-						free(temphex);
 					}
 				}
-				pub.parity = 0x03;
-				sha256((uint8_t*)&pub, 33,(uint8_t*) digest256);
-				rmd160((const unsigned char*)digest256,32,(unsigned char*) digest160);
-				r = bloom_check(&bloom,digest160,MAXLENGTHADDRESS);
-				if(r)  {
-					r = searchbinary(addressTable,digest160,N);
-					if(r)  {
-						temphex = tohex((char*)&pub,33);
-						printf("\nHit: Publickey found %s\n",temphex);
-						fd = fopen("KEYFOUNDKEYFOUND.txt","a+");
-						if(fd != NULL)	{
-#if defined(_WIN64) && !defined(__CYGWIN__)
-							WaitForSingleObject(write_keys, INFINITE);
-							fprintf(fd,"Publickey found %s\n",temphex);
-							fclose(fd);
-							ReleaseMutex(write_keys);
-
+				
+				// Set parity for compressed keys
+				pub[0].parity = 0x03;
+				pub[1].parity = 0x03;
+				pub[2].parity = 0x03;
+				pub[3].parity = 0x03;
+				
+#ifdef __ARM_NEON__
+				// Use NEON-optimized functions for parallel processing
+				// Process compressed keys (parity = 0x03)
+				sha256_4(33, (uint8_t*)&pub[0], (uint8_t*)&pub[1], (uint8_t*)&pub[2], (uint8_t*)&pub[3],
+				         (uint8_t*)digest256[0], (uint8_t*)digest256[1], (uint8_t*)digest256[2], (uint8_t*)digest256[3]);
+				ripemd160neon_32((uint8_t*)digest256[0], (uint8_t*)digest256[1], (uint8_t*)digest256[2], (uint8_t*)digest256[3],
+				                 (uint8_t*)digest160[0], (uint8_t*)digest160[1], (uint8_t*)digest160[2], (uint8_t*)digest160[3]);
 #else
-							pthread_mutex_lock(&write_keys);
-							fprintf(fd,"Publickey found %s\n",temphex);
-							fclose(fd);
-							pthread_mutex_unlock(&write_keys);
+				// Fallback to standard functions if NEON is not available
+				sha256((uint8_t*)&pub[0], 33, (uint8_t*)digest256[0]);
+				sha256((uint8_t*)&pub[1], 33, (uint8_t*)digest256[1]);
+				sha256((uint8_t*)&pub[2], 33, (uint8_t*)digest256[2]);
+				sha256((uint8_t*)&pub[3], 33, (uint8_t*)digest256[3]);
+				rmd160((const unsigned char*)digest256[0],32,(unsigned char*) digest160[0]);
+				rmd160((const unsigned char*)digest256[1],32,(unsigned char*) digest160[1]);
+				rmd160((const unsigned char*)digest256[2],32,(unsigned char*) digest160[2]);
+				rmd160((const unsigned char*)digest256[3],32,(unsigned char*) digest160[3]);
 #endif
+				
+				// Check bloom filter for all 4 keys
+				r[0] = bloom_check(&bloom,digest160[0],MAXLENGTHADDRESS);
+				r[1] = bloom_check(&bloom,digest160[1],MAXLENGTHADDRESS);
+				r[2] = bloom_check(&bloom,digest160[2],MAXLENGTHADDRESS);
+				r[3] = bloom_check(&bloom,digest160[3],MAXLENGTHADDRESS);
+				
+				// Process hits for compressed keys
+				for(int j = 0; j < 4; j++) {
+					if(r[j])  {
+						r[j] = searchbinary(addressTable,digest160[j],N);
+						if(r[j])	{
+							temphex = tohex((char*)&pub[j],33);
+							printf("\nHit: Publickey found %s\n",temphex);
+							fd = fopen("KEYFOUNDKEYFOUND.txt","a+");
+							if(fd != NULL)	{
+#if defined(_WIN64) && !defined(__CYGWIN__)
+								WaitForSingleObject(write_keys, INFINITE);
+								fprintf(fd,"Publickey found %s\n",temphex);
+								fclose(fd);
+								ReleaseMutex(write_keys);
+#else
+								pthread_mutex_lock(&write_keys);
+								fprintf(fd,"Publickey found %s\n",temphex);
+								fclose(fd);
+								pthread_mutex_unlock(&write_keys);
+#endif
+							}
+							else	{
+								fprintf(stderr,"\nPublickey found %s\nbut the file can't be open\n",temphex);
+								exit(EXIT_FAILURE);
+							}
+							free(temphex);
 						}
-						else	{
-							fprintf(stderr,"\nPublickey found %s\nbut the file can't be open\n",temphex);
-							exit(EXIT_FAILURE);
-						}
-						free(temphex);
 					}
 				}
-				pub.X.data32[7]++;
-				if(pub.X.data32[7] % DEBUGCOUNT == 0)  {
+				
+				// Increment the counter for all 4 keys
+				pub[0].X.data32[7]++;
+				pub[1].X.data32[7]++;
+				pub[2].X.data32[7]++;
+				pub[3].X.data32[7]++;
+				
+				// Update steps counter
+				if(pub[0].X.data32[7] % DEBUGCOUNT == 0)  {
 					steps[thread_number]++;
 				}
-			}	
-		}	
+			}
+		}
 	}while(pub2rmd_continue);
 	ends[thread_number] = 1;
 	return NULL;
