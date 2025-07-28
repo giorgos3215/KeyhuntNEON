@@ -16,9 +16,12 @@
 */
 
 #include "sha256.h"
-#include <immintrin.h>
 #include <string.h>
 #include <stdint.h>
+
+#ifdef __x86_64__
+#include <immintrin.h>
+#endif
 
 namespace _sha256sse
 {
@@ -423,6 +426,7 @@ namespace _sha256sse
 
 } // end namespace
 
+#ifdef __x86_64__
 void sha256sse_1B(
   uint32_t *i0,
   uint32_t *i1,
@@ -486,8 +490,9 @@ void sha256sse_1B(
   _mm_store_si128((__m128i *)(d3 + 16), _d3);
 
 }
+#endif // __x86_64__
 
-
+#ifdef __x86_64__
 void sha256sse_2B(
   uint32_t *i0,
   uint32_t *i1,
@@ -552,7 +557,9 @@ void sha256sse_2B(
   _mm_store_si128((__m128i *)(d3 + 16), _d3);
 
 }
+#endif // __x86_64__
 
+#ifdef __x86_64__
 void sha256sse_checksum(uint32_t *i0, uint32_t *i1, uint32_t *i2, uint32_t *i3,
   uint8_t *d0, uint8_t *d1, uint8_t *d2, uint8_t *d3) {
 
@@ -575,6 +582,8 @@ void sha256sse_checksum(uint32_t *i0, uint32_t *i1, uint32_t *i2, uint32_t *i3,
 #endif
 
 }
+#endif // __x86_64__
+
 
 #if 0
 void sha256sse_test() {

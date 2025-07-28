@@ -17,7 +17,10 @@
 
 #include "ripemd160.h"
 #include <string.h>
+
+#ifdef __x86_64__
 #include <immintrin.h>
+#endif
 
 // Internal SSE RIPEMD-160 implementation.
 namespace ripemd160sse {
@@ -320,6 +323,7 @@ namespace ripemd160sse {
 static const uint64_t sizedesc_32 = 32 << 3;
 static const unsigned char pad[64] = { 0x80 };
 
+#ifdef __x86_64__
 void ripemd160sse_32(
   unsigned char *i0,
   unsigned char *i1,
@@ -359,7 +363,9 @@ void ripemd160sse_32(
   DEPACK(d3,0);
 
 }
+#endif // __x86_64__
 
+#ifdef __x86_64__
 void ripemd160sse_test() {
 
   unsigned char h0[20];
@@ -407,3 +413,4 @@ void ripemd160sse_test() {
   printf("RIPE() Results OK !\n");
 
 }
+#endif // __x86_64__
