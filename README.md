@@ -82,19 +82,19 @@ apt install libgmp-dev -y
 To clone the repository
 
 ```
-git clone https://github.com/albertobsd/keyhunt.git
+git clone https://github.com/giorgos3215/KeyhuntNEON.git
 ```
 
 don't forget change to the keyhunt directory (But i'm not here to teach you linux commands)
 
 ```
-cd keyhunt
+cd KeyhuntNEON
 ```
 
 First compile:
 
 ```
-make
+make NEON
 ```
 
 if you have problems compiling the `main` version you can compile the `legacy` version
